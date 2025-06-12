@@ -1,0 +1,258 @@
+\documentclass{beamer}
+\usetheme{Madrid}
+\usecolortheme{seahorse}
+\usepackage{amsmath,amssymb}
+\usepackage{hyperref}
+\title{Discrete Markov Bridge:\\ Bridging Variational Inference and Discrete Diffusion}
+\author{Hengli Li, Yuxuan Wang, Song-Chun Zhu, Ying Nian Wu, Zilong Zheng}
+\institute{Peking University, Beijing Institute for General AI, UCLA}
+\date{\today}
+
+\begin{document}
+
+\begin{frame}
+  \titlepage
+\end{frame}
+
+\begin{frame}{Outline}
+  \tableofcontents
+\end{frame}
+
+\section{Motivation and Background}
+
+\begin{frame}{Motivation}
+  \textbf{Generative modeling} seeks to estimate an underlying data distribution $\mu$ and generate new samples from it.\\[1em]
+  \textbf{Diffusion models} have shown strong performance for both continuous and discrete data, but:
+  \begin{itemize}
+    \item Discrete diffusion models typically use fixed-rate transition matrices (e.g., uniform, absorbing).
+    \item Fixed matrices limit the expressiveness of latent representations and the design space.
+    \item Variational methods (e.g., VAEs) are highly expressive due to adaptive latent encodings.
+  \end{itemize}
+  \textbf{Goal:} Combine the flexibility of variational inference with the tractability of discrete diffusion.
+\end{frame}
+
+\begin{frame}{Limitations of Prior Discrete Diffusion}
+  \begin{itemize}
+    \item Existing discrete diffusion models use non-learnable, static transition matrices.
+    \item This restricts the model’s ability to adapt to complex data.
+    \item Only simple matrices (Absorb, Uniform) are computationally feasible.
+    \item No adaptive latent variable structure as in VAEs.
+  \end{itemize}
+  \textbf{Key Question:} Can we design a discrete diffusion model with a learnable, adaptive transition matrix and a variational structure?
+\end{frame}
+
+\section{Discrete Markov Bridge Framework}
+
+\begin{frame}{Overview of Discrete Markov Bridge (DMB)}
+  \begin{itemize}
+    \item DMB is a two-stage, bidirectional learning framework:
+      \begin{enumerate}
+        \item \textbf{Matrix-learning (Forward Bridge):} Learn a parameterized rate transition matrix to map data to a latent (prior) distribution.
+        \item \textbf{Score-learning (Backward Bridge):} Learn a neural network to estimate probability ratios (concrete scores) for reverse generation.
+      \end{enumerate}
+    \item Integrates variational inference (ELBO) with discrete diffusion.
+    \item Enables richer latent representations and improved modeling flexibility.
+  \end{itemize}
+  \vspace{1em}
+  \textbf{Diagram:}
+  \[
+    \mu \xrightarrow{\text{Matrix-learning}} p_T \xrightarrow{\text{Score-learning}} \hat{\mu}
+  \]
+\end{frame}
+
+\begin{frame}{Continuous-Time Discrete Markov Chain}
+  \textbf{State space:} $X = \{1, 2, \dots, n\}$\\
+  \textbf{Markov process:} $\{X(t): t \in \mathbb{R}, X(t) \in X\}$\\
+  \textbf{Transition probability:} $p_{t+s|t}(y|x) = \mathbb{P}(X(t+s)=y | X(t)=x)$\\
+  \textbf{Marginal:} $p_t(x) = \mathbb{P}(X(t) = x)$\\
+  \textbf{Rate matrix:}
+  \[
+    q_t(x, y) = \frac{d}{ds} p_{t+s|t}(y|x)\bigg|_{s=0}
+  \]
+  \textbf{Forward Kolmogorov equation:}
+  \[
+    \frac{d}{dt} p_t = p_t Q(t)
+  \]
+  where $Q(t)$ is a rate matrix: rows sum to zero, off-diagonals non-negative.
+\end{frame}
+
+\begin{frame}{Reversibility and Backward Process}
+  \textbf{Reversibility theorem:}\\
+  Given the forward equation $\frac{d}{dt} p_t = p_t Q(t)$, there exists a reverse process:
+  \[
+    \frac{d}{dt} p_{T-t} = p_{T-t} \hat{Q}(T-t)
+  \]
+  where
+  \[
+    \hat{Q}(t)_{x,y} = \frac{p_t(y)}{p_t(x)} Q(t)_{y,x}
+  \]
+  \textbf{Implication:} If we can estimate the probability ratios $\frac{p_t(y)}{p_t(x)}$, we can construct the reverse process and sample from the data distribution.
+\end{frame}
+
+\section{Matrix-learning: Adaptive Forward Process}
+
+\begin{frame}{Matrix-learning: Adaptive Transition Matrix}
+  \textbf{Key innovation:} Learn a parameterized, diagonalizable rate matrix $Q_\alpha$ with parameters $\alpha$.
+  \begin{itemize}
+    \item $Q_\alpha$ must have non-negative off-diagonals, rows sum to zero.
+    \item Diagonalizability enables efficient computation of matrix exponentials.
+    \item The forward process is:
+      \[
+        \frac{d}{dt} p_t = p_t Q_\alpha(t), \quad p_0 \approx \mu
+      \]
+    \item The terminal distribution $p_T$ serves as the learned prior.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Matrix-learning Objective}
+  \textbf{Objective:} Minimize the KL divergence between the forward conditional and the terminal prior:
+  \[
+    J_Q = \mathbb{E}_\mu \left[ \mathrm{KL}(p_{T|0;\alpha} \| p_{T;\alpha}) \right]
+  \]
+  where $p_{T|0;\alpha}$ is the conditional at time $T$ given data, and $p_{T;\alpha}$ is the marginal at $T$.
+  \vspace{1em}
+  \textbf{Example:} For $X = \{A, B, C\}$, $Q_\alpha$ can be learned so that the process at $T$ yields a desired prior (e.g., uniform or learned).
+\end{frame}
+
+\begin{frame}{Diagonalizability and Computational Efficiency}
+  \begin{itemize}
+    \item Diagonalizable $Q_\alpha$ allows efficient computation of $\exp(\sigma Q_\alpha)$ for transition probabilities.
+    \item Structured or sparse parameterizations reduce memory and computation cost.
+    \item Enables scaling to large state spaces (e.g., text sequences).
+  \end{itemize}
+\end{frame}
+
+\section{Score-learning: Reverse Process and Concrete Scores}
+
+\begin{frame}{Score-learning: Neural Score Estimation}
+  \textbf{Goal:} Estimate the ratio
+  \[
+    s_\theta(x, t, y) \approx \frac{p_{t|0}(y|x_0)}{p_{t|0}(x|x_0)}
+  \]
+  for all $x, y \in X$.
+  \begin{itemize}
+    \item $s_\theta$ is parameterized by a neural network.
+    \item Used to construct the reverse rate matrix:
+      \[
+        \hat{Q}(t)_{x,y} = s_\theta(x, t, y) Q_\alpha(t)_{y,x}
+      \]
+    \item Enables the backward process to reconstruct the data distribution from the latent.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Loss Function and Training}
+  \textbf{Variational objective:} Continuous-time Evidence Lower Bound (ELBO):
+  \[
+    \mathrm{ELBO} = \mathbb{E}_{x_0 \sim \mu} \left[ \mathbb{E}_{x_T \sim p_{T|0;\alpha}(\cdot | x_0)} \log p_{0|T;\theta}(x_0 | x_T) - \mathrm{KL}(p_{T|0;\alpha}(\cdot | x_0) \| p_T) \right]
+  \]
+  \begin{itemize}
+    \item $p_{0|T;\theta}$: backward process conditional (decoding).
+    \item $p_{T|0;\alpha}$: forward process conditional (encoding).
+    \item Jointly optimize $\alpha$ (transition matrix) and $\theta$ (score network) to maximize ELBO.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Theoretical Guarantees}
+  \begin{itemize}
+    \item DMB provides formal guarantees for reversibility and convergence of the learning process.
+    \item Under mild conditions, the learned model converges to the true data distribution as model capacity and data increase.
+    \item The ELBO structure ensures principled likelihood-based training and evaluation.
+  \end{itemize}
+\end{frame}
+
+\section{Computational Considerations}
+
+\begin{frame}{Efficient Computation and Space Complexity}
+  \begin{itemize}
+    \item Diagonalizable $Q_\alpha$ allows fast computation of matrix exponentials.
+    \item Structured/sparse parameterizations (e.g., block-diagonal, low-rank) reduce memory cost.
+    \item DMB scales to large vocabularies and sequence lengths, unlike prior models with dense $n \times n$ matrices.
+  \end{itemize}
+\end{frame}
+
+\section{Empirical Results}
+
+\begin{frame}{Text Modeling: Text8 Dataset}
+  \begin{itemize}
+    \item DMB achieves an ELBO of 1.38 on Text8, outperforming SEDD and other baselines.
+    \item Demonstrates effective modeling of complex natural language distributions.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Image Modeling: CIFAR-10}
+  \begin{itemize}
+    \item DMB integrated with VQ-VAE achieves results comparable to DDPM on CIFAR-10.
+    \item Shows generality across data modalities (text, images).
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Ablation and Analysis}
+  \begin{itemize}
+    \item Both Matrix-learning and Score-learning are essential for optimal performance.
+    \item Learned transition matrices adapt to data structure.
+    \item Score network accurately reconstructs data from latent.
+  \end{itemize}
+\end{frame}
+
+\section{Discussion and Conclusion}
+
+\begin{frame}{Advantages and Limitations}
+  \textbf{Advantages:}
+  \begin{itemize}
+    \item Learnable transition matrix enables richer latent representations.
+    \item Variational structure provides principled likelihood estimation.
+    \item Scalable to large state spaces.
+  \end{itemize}
+  \textbf{Limitations:}
+  \begin{itemize}
+    \item Computational overhead for very large vocabularies.
+    \item Further exploration needed for other data types (e.g., graphs).
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Conclusion}
+  \begin{itemize}
+    \item Discrete Markov Bridge (DMB) unifies variational inference and discrete diffusion.
+    \item Introduces learnable, adaptive transition matrices for flexible modeling.
+    \item Achieves state-of-the-art results on text and image tasks.
+    \item Opens new avenues for discrete generative modeling research.
+  \end{itemize}
+  \vspace{1em}
+  \textbf{Code:} \url{https://github.com/Henry839/Discrete-Markov-Bridge}
+\end{frame}
+
+\begin{frame}{Notation Summary}
+  \begin{itemize}
+    \item $X = \{1, \ldots, n\}$: Discrete state space
+    \item $\mu$: Data distribution
+    \item $p_t$: Distribution at time $t$
+    \item $Q_\alpha$: Learnable rate matrix
+    \item $s_\theta(x, t, y)$: Neural score estimator
+    \item $p_{T|0;\alpha}$: Forward conditional
+    \item $p_{0|T;\theta}$: Backward conditional
+    \item ELBO: Evidence Lower Bound
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Example Computation}
+  \textbf{Suppose:} $X = \{A, B\}$, $\mu = (0.7, 0.3)$, and
+  \[
+    Q_\alpha = \begin{bmatrix} -0.5 & 0.5 \\ 0.4 & -0.4 \end{bmatrix}
+  \]
+  At time $t$, $p_t = (0.6, 0.4)$.\\[1em]
+  Reverse matrix:
+  \[
+    \hat{Q}(t)_{A,B} = \frac{0.4}{0.6} \times 0.4 \approx 0.267
+  \]
+  \[
+    \hat{Q}(t)_{B,A} = \frac{0.6}{0.4} \times 0.5 = 0.75
+  \]
+  The neural network is trained to estimate these ratios for all $x, y$.
+\end{frame}
+
+\begin{frame}{References}
+  Discrete Markov Bridge, Hengli Li et al., arXiv:2505.19752 (2025)\\
+  \url{https://arxiv.org/abs/2505.19752}
+\end{frame}
+
+\end{document}
