@@ -1,0 +1,306 @@
+\documentclass{beamer}
+
+% Theme and packages
+\usetheme{Madrid}
+\usecolortheme{seahorse}
+\usefonttheme{professionalfonts}
+\usepackage{amsmath, amssymb}
+\usepackage{tikz}
+\usepackage{hyperref}
+\usepackage{booktabs}
+
+\title[Score Entropy Discrete Diffusion]{Score Entropy Discrete Diffusion Models\\ \small{(Lou, Meng, Ermon, ICML 2024)}}
+\author{Aaron Lou, Chenlin Meng, Stefano Ermon}
+\institute{Stanford University}
+\date{\today}
+
+\begin{document}
+
+% Title Slide
+\begin{frame}
+  \titlepage
+\end{frame}
+
+% Outline
+\begin{frame}{Outline}
+  \tableofcontents
+\end{frame}
+
+\section{Motivation and Background}
+
+\begin{frame}{Generative Modeling and Diffusion Models}
+  \textbf{Generative modeling} aims to learn the data distribution $p_{\text{data}}$ to generate new samples.\\[1em]
+  \textbf{Diffusion models} (DMs) are a class of generative models that gradually transform data into noise and learn to reverse this process.
+  \vspace{1em}
+  \begin{block}{Success and Challenges}
+    \begin{itemize}
+      \item DMs excel in continuous domains (images, audio).
+      \item Struggle with discrete data (e.g., text, categorical sequences).
+      \item Discrete domains lack gradients; score matching is nontrivial.
+    \end{itemize}
+  \end{block}
+\end{frame}
+
+\begin{frame}{Autoregressive vs. Diffusion for Text}
+  \textbf{Autoregressive models} (e.g., GPT-2) dominate language modeling due to:
+  \begin{itemize}
+    \item Simple chain rule factorization
+    \item Efficient likelihood computation
+    \item High sample quality
+  \end{itemize}
+  \vspace{1em}
+  \textbf{Diffusion models} for text:
+  \begin{itemize}
+    \item Offer parallel generation, controllable infilling
+    \item Historically underperform on likelihoods and sample quality
+  \end{itemize}
+\end{frame}
+
+\section{Discrete Diffusion Process}
+
+\begin{frame}{Discrete Diffusion: The Forward Process}
+  \textbf{Discrete space:} $X = \{1, 2, ..., N\}$ (e.g., vocabulary of size $N$)\\
+  Probability distributions are vectors $p \in \mathbb{R}^N$ with $p_i \geq 0, \sum_i p_i = 1$.
+
+  \vspace{1em}
+  \textbf{Continuous-time Markov process:}
+  \[
+    \frac{d p_t}{dt} = Q_t p_t, \quad p_0 \approx p_{\text{data}}
+  \]
+  where $Q_t$ is a transition rate matrix:
+  \begin{itemize}
+    \item $Q_t(i, j) \geq 0$ for $i \neq j$
+    \item $\sum_i Q_t(i, j) = 0$ (columns sum to zero)
+  \end{itemize}
+  \vspace{1em}
+  As $t \to \infty$, $p_t$ approaches a simple base distribution $p_{\text{base}}$ (e.g., uniform).
+\end{frame}
+
+\begin{frame}{Discrete Diffusion: Transition Densities}
+  For small $\Delta t$:
+  \[
+    p(x_{t+\Delta t} = y \mid x_t = x) = \delta_{xy} + Q_t(y, x) \Delta t + O(\Delta t^2)
+  \]
+  \textbf{Interpretation:}
+  \begin{itemize}
+    \item With probability $1 - \sum_{y \neq x} Q_t(y, x) \Delta t$, stay at $x$.
+    \item With probability $Q_t(y, x) \Delta t$, jump from $x$ to $y$.
+  \end{itemize}
+  \vspace{1em}
+  \textbf{Example:} For $X = \{A, B, C\}$ and
+  \[
+    Q = \begin{bmatrix}
+      -2 & 1 & 1 \\
+      1 & -2 & 1 \\
+      1 & 1 & -2
+    \end{bmatrix}
+  \]
+  the process jumps from any state to another with equal rate.
+\end{frame}
+
+\begin{frame}{Reverse Process and Concrete Scores}
+  \textbf{Reverse diffusion:}
+  \[
+    \frac{d p_{T-t}}{dt} = \tilde{Q}_{T-t} p_{T-t}
+  \]
+  where
+  \[
+    \tilde{Q}_t(y, x) = \frac{p_t(y)}{p_t(x)} Q_t(x, y)
+  \]
+  The ratios $\frac{p_t(y)}{p_t(x)}$ are called \textbf{concrete scores} (generalize $\nabla_x \log p_t$).
+  \vspace{1em}
+  \textbf{Goal:} Learn to approximate these ratios for model-based generation.
+\end{frame}
+
+\section{Score Entropy: The Key Innovation}
+
+\begin{frame}{Score Matching in Discrete Spaces}
+  \textbf{Continuous:} Score matching learns $\nabla_x \log p(x)$.
+  \vspace{1em}
+  \textbf{Discrete:} Need to learn ratios $\frac{p(y)}{p(x)}$ for $x \neq y$.
+  \vspace{1em}
+  \textbf{Previous approaches:}
+  \begin{itemize}
+    \item Mean prediction: Learn $p_{0|t}$ (harder, less stable)
+    \item Ratio matching: Maximum likelihood on marginals (expensive)
+    \item Concrete score matching: $\ell_2$ loss on ratios (can diverge)
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Score Entropy Loss: Definition}
+  \textbf{Score entropy} is a new loss for learning concrete scores:
+  \[
+    L_{SE} = \mathbb{E}_{x \sim p}\left[\sum_{y \neq x} w_{xy} \left( s_\theta(x)_y - \frac{p(y)}{p(x)} \log s_\theta(x)_y + K\left(\frac{p(y)}{p(x)}\right) \right) \right]
+  \]
+  where
+  \[
+    K(a) = a(\log a - 1)
+  \]
+  and $w_{xy} \geq 0$ are weights (often $1$).
+  \vspace{1em}
+  \textbf{Notation:}
+  \begin{itemize}
+    \item $s_\theta(x)_y$: Model's estimate of $\frac{p(y)}{p(x)}$
+    \item $p(y), p(x)$: True probabilities
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Score Entropy: Properties}
+  \begin{itemize}
+    \item \textbf{Non-negative, convex, symmetric} (Bregman divergence with $F = -\log$)
+    \item \textbf{Consistency:} Minimizing $L_{SE}$ recovers the true ratios.
+    \item \textbf{Log-barrier:} Penalizes negative or zero $s_\theta(x)_y$ (keeps outputs positive).
+    \item \textbf{Generalizes cross-entropy:} For probabilities, reduces to standard cross-entropy.
+  \end{itemize}
+  \vspace{1em}
+  \textbf{Example:} If $p(y) = 0.2, p(x) = 0.4$, $s_\theta(x)_y = 0.5$,
+  \[
+    \frac{p(y)}{p(x)} = 0.5,\quad K(0.5) = 0.5 (\log 0.5 - 1) \approx -0.8466
+  \]
+\end{frame}
+
+\section{Training Objective and Implementation}
+
+\begin{frame}{Denoising Score Entropy for Diffusion}
+  \textbf{Practical variant:} Use denoising score entropy for scalable training:
+  \[
+    L_{DSE} = \mathbb{E}_{x_0 \sim p_0, x \sim p(\cdot|x_0)} \left[ \sum_{y \neq x} w_{xy} \left( s_\theta(x)_y - \frac{p(y|x_0)}{p(x|x_0)} \log s_\theta(x)_y \right) \right]
+  \]
+  \textbf{Interpretation:}
+  \begin{itemize}
+    \item $p(x|x_0)$: Transition probability from $x_0$ to $x$ after some noise
+    \item $p(y|x_0)$: Transition probability from $x_0$ to $y$
+    \item $s_\theta(x)_y$: Model's estimate of their ratio
+  \end{itemize}
+  \textbf{Sampling:} Draw $x_0$ from data, $x$ from noisy process, compute loss on pairs $(x, y)$.
+\end{frame}
+
+\begin{frame}{Likelihood Bound and ELBO}
+  \textbf{Likelihood training:}
+  \[
+    -\log p_\theta(x_0) \leq L_{DWDSE}(x_0) + D_{KL}(p_{T|0}(\cdot|x_0) \| p_{\text{base}})
+  \]
+  where $L_{DWDSE}$ is the diffusion-weighted denoising score entropy:
+  \[
+    L_{DWDSE}(x_0) = \int_0^T \mathbb{E}_{x_t \sim p_{t|0}(\cdot|x_0)} \left[ \sum_{y \neq x_t} Q_t(x_t, y) \left( s_\theta(x_t, t)_y - \frac{p_{t|0}(y|x_0)}{p_{t|0}(x_t|x_0)} \log s_\theta(x_t, t)_y + K\left( \frac{p_{t|0}(y|x_0)}{p_{t|0}(x_t|x_0)} \right) \right) \right] dt
+  \]
+  \textbf{This provides an upper bound on negative log-likelihood.}
+\end{frame}
+
+\begin{frame}{Efficient Implementation for Sequences}
+  For sequences $x = (x_1, ..., x_d)$, $X = \{1,...,n\}^d$:
+  \begin{itemize}
+    \item Use token-level transition matrices $Q^{\text{tok}}$.
+    \item Only perturb one token at a time (sparse $Q$).
+    \item Score network outputs $s_\theta(x, t) \in \mathbb{R}^{d \times n}$, where $s_\theta(x, t)_{i, y}$ estimates ratio for changing $x_i$ to $y$.
+  \end{itemize}
+  \textbf{Transition probabilities:}
+  \[
+    p^{\text{seq}}_{t|0}(\tilde{x}|x) = \prod_{i=1}^d p^{\text{tok}}_{t|0}(\tilde{x}_i|x_i)
+  \]
+  \textbf{Example:} For $d=3$, $n=4$:
+  \[
+    x = (1,2,3),\quad \tilde{x} = (1,4,3),\quad p^{\text{seq}}_{t|0}(\tilde{x}|x) = p^{\text{tok}}_{t|0}(1|1) \cdot p^{\text{tok}}_{t|0}(4|2) \cdot p^{\text{tok}}_{t|0}(3|3)
+  \]
+\end{frame}
+
+\begin{frame}{Transition Matrix Structures}
+  \textbf{Uniform transitions:}
+  \[
+    Q_{\text{uniform}} = \frac{1}{N}
+    \begin{bmatrix}
+      1-N & 1 & \cdots & 1 \\
+      1 & 1-N & \cdots & 1 \\
+      \vdots & \vdots & \ddots & \vdots \\
+      1 & 1 & \cdots & 1-N
+    \end{bmatrix}
+  \]
+  \textbf{Absorbing transitions (MASK token):}
+  \[
+    Q_{\text{absorb}} =
+    \begin{bmatrix}
+      -1 & 0 & \cdots & 0 & 0 \\
+      0 & -1 & \cdots & 0 & 0 \\
+      \vdots & \vdots & \ddots & \vdots & \vdots \\
+      0 & 0 & \cdots & -1 & 0 \\
+      1 & 1 & \cdots & 1 & 0
+    \end{bmatrix}
+  \]
+  \textbf{Interpretation:} Absorbing state acts like a [MASK] token in BERT.
+\end{frame}
+
+\section{Sampling and Generation}
+
+\begin{frame}{Simulating the Reverse Diffusion}
+  \textbf{Goal:} Generate $x_0$ from noise $x_T$ by reversing the diffusion.
+  \vspace{1em}
+  \textbf{Tau-leaping (Euler):} For each token $i$:
+  \[
+    p_i(y|x^i_t) = \delta_{x^i_t}(y) + \Delta t Q^{\text{tok}}_t(x^i_t, y) s_\theta(x_t, t)_{i, y}
+  \]
+  \textbf{Tweedie denoising:}
+  \[
+    p^{\text{Tweedie}}_{t-\Delta t|t}(x_{t-\Delta t}|x_t) \propto [\exp(-\sigma^{\Delta t}_t Q) s_\theta(x_t, t)_i]_{x^i_{t-\Delta t}} \exp(\sigma^{\Delta t}_t Q)(x^i_t, x^i_{t-\Delta t})
+  \]
+  where $\sigma^{\Delta t}_t = \sigma(t) - \sigma(t - \Delta t)$.
+\end{frame}
+
+\begin{frame}{Conditional Generation and Infilling}
+  \textbf{Infilling:} Given prompt tokens at positions $\Omega$ with values $y$, generate the rest.
+  \[
+    \frac{p_t(x_{\bar{\Omega}} = z' | x_\Omega = y)}{p_t(x_{\bar{\Omega}} = z | x_\Omega = y)} = \frac{p_t(x = z' \oplus_\Omega y)}{p_t(x = z \oplus_\Omega y)}
+  \]
+  \textbf{Implication:} The same score function $s_\theta$ can be used for arbitrary conditioning, enabling flexible prompting and infilling.
+\end{frame}
+
+\section{Empirical Results}
+
+\begin{frame}{Language Modeling Results}
+  \textbf{Perplexity Comparison:}
+  \begin{tabular}{lcccc}
+    \toprule
+    Model & LAMBADA & WikiText2 & PTB & 1BW \\
+    \midrule
+    GPT-2 (small) & 45.04 & 42.43 & 138.43 & 75.20 \\
+    SEDD Absorb & $\leq$50.92 & $\leq$41.84 & $\leq$114.24 & $\leq$79.29 \\
+    SEDD Uniform & $\leq$65.40 & $\leq$50.27 & $\leq$140.12 & $\leq$101.37 \\
+    D3PM & $\leq$93.47 & $\leq$77.28 & $\leq$200.82 & $\leq$138.92 \\
+    \bottomrule
+  \end{tabular}
+  \vspace{1em}
+  SEDD outperforms prior diffusion models and is competitive with GPT-2.
+\end{frame}
+
+\begin{frame}{Sample Generation Quality}
+  \textbf{SEDD generates:}
+  \begin{itemize}
+    \item High-quality, coherent text without temperature annealing
+    \item Comparable or better generative perplexity than GPT-2
+    \item Efficient compute-quality tradeoff (fewer network evaluations)
+  \end{itemize}
+  \vspace{1em}
+  \textbf{Example:} (from paper)
+  \begin{quote}
+    "As Jeff Romer recently wrote, 'The economy has now reached a corner - 64\% of household wealth and 80\% of wealth goes to credit cards because of government austerity...'"
+  \end{quote}
+\end{frame}
+
+\section{Summary and Takeaways}
+
+\begin{frame}{Summary and Takeaways}
+  \begin{itemize}
+    \item \textbf{Score entropy} enables principled, scalable training for discrete diffusion models.
+    \item SEDD achieves state-of-the-art results for non-autoregressive language modeling.
+    \item Enables flexible, parallel, and controllable generation (infilling, arbitrary prompts).
+    \item Bridges the gap between diffusion and autoregressive models for discrete data.
+  \end{itemize}
+  \vspace{1em}
+  \textbf{Code:} \url{https://github.com/louaaron/Score-Entropy-Discrete-Diffusion}
+\end{frame}
+
+\begin{frame}{References}
+  Lou, A., Meng, C., Ermon, S. (2024). Discrete Diffusion Modeling by Estimating the Ratios of the Data Distribution. ICML 2024.\\
+  \url{https://arxiv.org/abs/2310.16834}
+\end{frame}
+
+\end{document}
