@@ -26,7 +26,7 @@
 *.vrb
 
 # PDF and other output files
-*.pdf
+# *.pdf # check in final PDF as well
 *.dvi
 *.ps
 
